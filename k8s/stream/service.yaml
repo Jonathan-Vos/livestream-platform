@@ -1,0 +1,43 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream
+  labels:
+    app.kubernetes.io/name: stream
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: stream
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: stream
+  annotations:
+    # cert-manager (pas de issuer aan naar jouw setup)
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Traefik-specifiek (alleen actief als je Traefik Ingress controller gebruikt):
+    # traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik     # verander naar nginx / etc. indien nodig
+  tls:
+    - hosts:
+        - stream.jouwdomein.nl
+      secretName: stream-tls
+  rules:
+    - host: stream.jouwdomein.nl
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: stream
+                port:
+                  number: 80

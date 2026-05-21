@@ -1,0 +1,61 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stream-config
+data:
+  # Restreamer-instellingen (override per environment via kustomize)
+  YOUTUBE_URL: "https://www.youtube.com/watch?v=jfKfPfyJRdk"
+  OUTPUT_URL: "/hls/stream.m3u8"
+  OUTPUT_FORMAT: "hls"
+  VIDEO_BITRATE: "12000k"
+  AUDIO_BITRATE: "256k"
+  PRESET: "veryfast"
+  INPUT_QUALITY: "best"
+  HLS_SEGMENT_TIME: "4"
+  HLS_LIST_SIZE: "6"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stream-nginx-config
+data:
+  default.conf: |
+    server {
+        listen 80 default_server;
+        server_name _;
+        root /hls;
+
+        access_log /dev/stdout;
+        error_log /dev/stderr warn;
+
+        types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t                    ts;
+        }
+
+        # CORS (essentieel voor cross-origin embedding in de viewer)
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS" always;
+        add_header Access-Control-Max-Age "100" always;
+        add_header Vary "Origin" always;
+
+        # Playlist verandert continu — niet cachen
+        location ~ \.m3u8$ {
+            add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+            add_header Access-Control-Allow-Origin "*" always;
+        }
+
+        # Segmenten zijn immutable zodra geschreven
+        location ~ \.ts$ {
+            add_header Cache-Control "public, max-age=3600, immutable" always;
+            add_header Access-Control-Allow-Origin "*" always;
+        }
+
+        location = /healthz {
+            access_log off;
+            return 200 "ok\n";
+            add_header Content-Type text/plain;
+        }
+    }

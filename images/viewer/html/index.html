@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Stream</title>
+<script>
+  // Title aanpassen zodra config geladen is — gebeurt via een tweede setter
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.PAGE_TITLE) document.title = window.PAGE_TITLE;
+  });
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script src="/config.js"></script>
+<style>
+  :root {
+    --bg:        #0a0d0c;
+    --panel:     #11151a;
+    --panel-2:   #161b22;
+    --ink:       #e8e2d5;
+    --dim:       #6b7280;
+    --rule:      #1f2630;
+    --accent:    #ff3d2e;
+    --accent-2:  #f4c95d;
+    --grid:      rgba(255,255,255,.025);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0/40px 40px,
+      radial-gradient(ellipse at 50% 0%, #16202b 0%, var(--bg) 70%);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* Subtiele grain-overlay voor de broadcast-monitor vibe */
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    mix-blend-mode: overlay;
+    opacity: .8;
+    z-index: 50;
+  }
+
+  .frame {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 32px 28px 64px;
+  }
+
+  /* ── Header ───────────────────────────── */
+  header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 24px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 28px;
+  }
+  h1 {
+    margin: 0;
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: clamp(40px, 6vw, 72px);
+    line-height: .95;
+    letter-spacing: -0.02em;
+  }
+  h1 .em { color: var(--accent-2); font-style: italic; }
+  .meta {
+    text-align: right;
+    color: var(--dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .15em;
+    line-height: 1.7;
+  }
+  .meta strong { color: var(--ink); font-weight: 500; }
+
+  /* ── Player container ─────────────────── */
+  .player-wrap {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,.02) inset,
+      0 30px 80px -20px rgba(0,0,0,.6);
+  }
+  .player-wrap::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      repeating-linear-gradient(0deg,
+        rgba(255,255,255,.014) 0 1px,
+        transparent 1px 3px);
+    pointer-events: none;
+    z-index: 2;
+  }
+  video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: #000;
+    object-fit: contain;
+  }
+
+  /* ── HUD-overlays ─────────────────────── */
+  .hud {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    font-size: 11px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--ink);
+    text-shadow: 0 0 8px rgba(0,0,0,.8);
+  }
+  .hud.tl { top: 14px; left: 16px; }
+  .hud.tr { top: 14px; right: 16px; }
+  .hud.bl { bottom: 14px; left: 16px; color: var(--dim); }
+
+  .live {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(0,0,0,.55);
+    backdrop-filter: blur(4px);
+    padding: 6px 10px;
+    border: 1px solid rgba(255,255,255,.08);
+  }
+  .live .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 var(--accent);
+    animation: pulse 1.6s infinite;
+  }
+  .live.offline .dot { background: var(--dim); animation: none; }
+  .live.offline { color: var(--dim); }
+
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(255,61,46,.6); }
+    70%  { box-shadow: 0 0 0 10px rgba(255,61,46,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,61,46,0); }
+  }
+
+  /* ── Footer / signaalstrip ─────────────── */
+  .sig {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-top: 28px;
+  }
+  .sig div {
+    background: var(--panel-2);
+    padding: 14px 16px;
+  }
+  .sig .k {
+    color: var(--dim);
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .sig .v {
+    font-family: 'Fraunces', serif;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  .sig .v.small { font-size: 14px; font-family: 'JetBrains Mono', monospace; }
+
+  /* ── Status melding bij offline ────────── */
+  .notice {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: linear-gradient(180deg, rgba(10,13,12,.4), rgba(10,13,12,.85));
+    z-index: 4;
+    color: var(--ink);
+    text-align: center;
+    padding: 32px;
+  }
+  .notice.show { display: flex; }
+  .notice .label {
+    font-size: 10px;
+    letter-spacing: .25em;
+    color: var(--accent-2);
+    text-transform: uppercase;
+  }
+  .notice .msg {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    line-height: 1.2;
+    max-width: 480px;
+  }
+  .notice .hint {
+    color: var(--dim);
+    font-size: 12px;
+  }
+
+  @media (max-width: 640px) {
+    .frame { padding: 20px 16px 40px; }
+    header { grid-template-columns: 1fr; align-items: start; }
+    .meta { text-align: left; }
+    .sig { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<main class="frame">
+
+  <header>
+    <h1>Live<span class="em">.</span></h1>
+    <div class="meta">
+      <strong>BROADCAST</strong> · KANAAL 01<br>
+      RE-STREAM · HLS / TS<br>
+      <span id="clock">--:--:--</span>
+    </div>
+  </header>
+
+  <div class="player-wrap">
+    <div class="hud tl">
+      <span class="live" id="liveBadge"><span class="dot"></span><span id="liveLabel">connecting</span></span>
+    </div>
+    <div class="hud tr" id="resolution">— · —</div>
+    <div class="hud bl" id="latencyInfo">latency: —</div>
+
+    <div class="notice" id="notice">
+      <div class="label">— stream offline —</div>
+      <div class="msg" id="noticeMsg">Wachten op signaal</div>
+      <div class="hint">Opnieuw proberen over <span id="retry">5</span>s…</div>
+    </div>
+
+    <video id="video" controls playsinline muted></video>
+  </div>
+
+  <div class="sig">
+    <div><div class="k">Status</div><div class="v small" id="statStatus">idle</div></div>
+    <div><div class="k">Bitrate</div><div class="v small" id="statBitrate">—</div></div>
+    <div><div class="k">Buffer</div><div class="v small" id="statBuffer">—</div></div>
+    <div><div class="k">Dropped</div><div class="v small" id="statDropped">0</div></div>
+  </div>
+
+</main>
+
+<script>
+  // ─── CONFIG ────────────────────────────────────────────
+  // STREAM_URL wordt geïnjecteerd door /config.js (runtime via env var STREAM_URL)
+  const STREAM_URL = window.STREAM_URL || '/stream.m3u8';
+
+  if (!window.STREAM_URL) {
+    console.warn('[viewer] STREAM_URL niet geconfigureerd via config.js — gebruik fallback /stream.m3u8');
+  }
+
+  // ─── Setup ─────────────────────────────────────────────
+  const video    = document.getElementById('video');
+  const badge    = document.getElementById('liveBadge');
+  const label    = document.getElementById('liveLabel');
+  const resEl    = document.getElementById('resolution');
+  const latEl    = document.getElementById('latencyInfo');
+  const notice   = document.getElementById('notice');
+  const noticeMsg= document.getElementById('noticeMsg');
+  const retryEl  = document.getElementById('retry');
+  const statStatus  = document.getElementById('statStatus');
+  const statBitrate = document.getElementById('statBitrate');
+  const statBuffer  = document.getElementById('statBuffer');
+  const statDropped = document.getElementById('statDropped');
+
+  function setLive(state, text) {
+    label.textContent = text;
+    badge.classList.toggle('offline', state !== 'live');
+  }
+  function showNotice(msg) {
+    noticeMsg.textContent = msg;
+    notice.classList.add('show');
+  }
+  function hideNotice() { notice.classList.remove('show'); }
+
+  // Klok
+  setInterval(() => {
+    const d = new Date();
+    document.getElementById('clock').textContent =
+      d.toLocaleTimeString('nl-NL', { hour12: false });
+  }, 1000);
+
+  // Buffer / resolutie / bitrate updates
+  setInterval(() => {
+    if (!video.videoWidth) return;
+    resEl.textContent = `${video.videoWidth}×${video.videoHeight}`;
+    try {
+      const b = video.buffered;
+      if (b.length) {
+        const ahead = b.end(b.length - 1) - video.currentTime;
+        statBuffer.textContent = ahead.toFixed(1) + 's';
+        latEl.textContent = 'buffer: ' + ahead.toFixed(1) + 's';
+      }
+    } catch (_) {}
+    const q = video.getVideoPlaybackQuality?.();
+    if (q) statDropped.textContent = q.droppedVideoFrames;
+  }, 1000);
+
+  // ─── Player ────────────────────────────────────────────
+  let hls;
+  let retryTimer;
+
+  function startRetryCountdown(seconds, fn) {
+    clearInterval(retryTimer);
+    let n = seconds;
+    retryEl.textContent = n;
+    retryTimer = setInterval(() => {
+      n--; retryEl.textContent = n;
+      if (n <= 0) { clearInterval(retryTimer); fn(); }
+    }, 1000);
+  }
+
+  function load() {
+    hideNotice();
+    setLive('connecting', 'connecting');
+    statStatus.textContent = 'connecting';
+
+    if (Hls.isSupported()) {
+      if (hls) { hls.destroy(); }
+      hls = new Hls({
+        lowLatencyMode: true,
+        backBufferLength: 30,
+        liveSyncDurationCount: 3,
+      });
+      hls.loadSource(STREAM_URL);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        statStatus.textContent = 'playing';
+        setLive('live', 'live');
+        video.play().catch(() => {});
+      });
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
+        const lvl = hls.levels[d.level];
+        if (lvl) statBitrate.textContent = Math.round(lvl.bitrate / 1000) + ' kbps';
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (!data.fatal) return;
+        statStatus.textContent = 'error';
+        setLive('offline', 'offline');
+        showNotice(
+          data.type === Hls.ErrorTypes.NETWORK_ERROR
+            ? 'Geen verbinding met de stream'
+            : 'Stream onderbroken'
+        );
+        startRetryCountdown(5, load);
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari / iOS native
+      video.src = STREAM_URL;
+      video.addEventListener('loadedmetadata', () => {
+        statStatus.textContent = 'playing';
+        setLive('live', 'live');
+      });
+      video.addEventListener('error', () => {
+        setLive('offline', 'offline');
+        showNotice('Stream niet beschikbaar');
+        startRetryCountdown(5, load);
+      });
+    } else {
+      showNotice('Browser ondersteunt geen HLS');
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>
