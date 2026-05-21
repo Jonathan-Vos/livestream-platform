@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream
+  labels:
+    app.kubernetes.io/name: stream
+    app.kubernetes.io/component: ingest
+spec:
+  # Slechts één replica — twee ffmpeg-processen die naar dezelfde URL pushen
+  # heeft geen zin. Schalen doe je downstream (CDN, viewer, etc.)
+  replicas: 1
+  strategy:
+    type: Recreate     # geen rolling update; emptyDir mag verloren gaan
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stream
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stream
+        app.kubernetes.io/component: ingest
+    spec:
+      # Gedeelde emptyDir tussen restreamer en nginx-sidecar
+      volumes:
+        - name: hls-data
+          emptyDir:
+            medium: Memory       # tmpfs = snel, geen disk-IO; ~256Mi is genoeg
+            sizeLimit: 512Mi
+        - name: nginx-config
+          configMap:
+            name: stream-nginx-config
+
+      containers:
+        # ─── Restreamer ─────────────────────────────────────
+        - name: restreamer
+          image: ghcr.io/JOUW_GEBRUIKERSNAAM/livestream-platform-restreamer:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: stream-config
+          volumeMounts:
+            - name: hls-data
+              mountPath: /hls
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "2000m"          # libx264 veryfast @ 12Mbps ~ 1-2 cores
+              memory: "1Gi"
+
+        # ─── HLS-server sidecar ─────────────────────────────
+        - name: hls-server
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: hls-data
+              mountPath: /hls
+              readOnly: true
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "16Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
